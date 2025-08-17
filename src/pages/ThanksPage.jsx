@@ -10,15 +10,16 @@ function ThanksPage() {
       <main style={{ maxWidth: '600px', margin: '2rem auto', textAlign: 'center' }}>
         <h2>✅ Спасибо за заказ!</h2>
         <p>Мы скоро с вами свяжемся для подтверждения.</p>
-        <Link to="/" style={{
-          display: 'inline-block',
-          marginTop: '20px',
-          padding: '10px 20px',
-          backgroundColor: '#007bff',
-          color: '#fff',
-          textDecoration: 'none',
-          borderRadius: '4px'
-        }}>
+        <Link to="/"
+          style={{
+            display: 'inline-block',
+            marginTop: '20px',
+            padding: '10px 20px',
+            backgroundColor: 'var(--color-primary)',
+            color: 'var(--color-btn, #fff)',
+            textDecoration: 'none',
+            borderRadius: '4px'
+          }}>
           Вернуться на главную
         </Link>
       </main>

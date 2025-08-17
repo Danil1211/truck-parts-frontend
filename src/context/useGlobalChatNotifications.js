@@ -1,6 +1,8 @@
 import { useAdminNotify } from "./AdminNotifyContext";
 import { useEffect, useRef } from "react";
 
+const apiUrl = import.meta.env.VITE_API_URL || '';
+
 export function useGlobalChatNotifications() {
   const { notify, incrementUnread, unread } = useAdminNotify();
   const prevMsgIds = useRef({});
@@ -14,7 +16,7 @@ export function useGlobalChatNotifications() {
     async function fetchNewMessages() {
       let chats = [];
       try {
-        const res = await fetch("/api/chat/admin", {
+        const res = await fetch(`${apiUrl}/api/chat/admin`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.status !== 200) return;

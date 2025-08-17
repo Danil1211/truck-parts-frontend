@@ -1,14 +1,21 @@
+// src/admin/AdminChatPage.jsx
 import React, { useState, useEffect, useRef } from "react";
 import Picker from "emoji-picker-react";
-import "./AdminPanel.css";
+import "../assets/AdminPanel.css";
 import { useAdminNotify } from "../context/AdminNotifyContext";
+import { useAuth } from "../context/AuthContext";
 
-// --- Вспомогательные
+const API_URL = import.meta.env.VITE_API_URL || "";
+
+/** хелперы */
+const api = (path) => `${API_URL}${path}`;
+
 function decodeHtml(html) {
-  const txt = document.createElement('textarea');
+  const txt = document.createElement("textarea");
   txt.innerHTML = html;
   return txt.value;
 }
+
 function TypingAnimation() {
   const [dots, setDots] = useState("...");
   useEffect(() => {
@@ -22,6 +29,7 @@ function TypingAnimation() {
   }, []);
   return <span style={{ marginLeft: 3 }}>{dots}</span>;
 }
+
 function VoiceMessage({ audioUrl, createdAt }) {
   const audioRef = useRef();
   const [playing, setPlaying] = useState(false);
@@ -54,6 +62,7 @@ function VoiceMessage({ audioUrl, createdAt }) {
     </div>
   );
 }
+
 function AudioPreview({ audioPreview, onRemove }) {
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef();
@@ -99,17 +108,19 @@ function AudioPreview({ audioPreview, onRemove }) {
   if (!audioPreview) return null;
 
   return (
-    <div style={{
-      flex: 1,
-      display: "flex",
-      alignItems: "center",
-      background: "#eaf8ff",
-      borderRadius: 16,
-      padding: "10px 18px",
-      marginRight: 12,
-      boxShadow: "0 1px 6px #0d99ff11",
-      minWidth: 200,
-    }}>
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        background: "#eaf8ff",
+        borderRadius: 16,
+        padding: "10px 18px",
+        marginRight: 12,
+        boxShadow: "0 1px 6px #0d99ff11",
+        minWidth: 200,
+      }}
+    >
       <button
         onClick={handlePlayPause}
         style={{
@@ -123,7 +134,7 @@ function AudioPreview({ audioPreview, onRemove }) {
           marginRight: 10,
           display: "flex",
           alignItems: "center",
-          justifyContent: "center"
+          justifyContent: "center",
         }}
         type="button"
       >
@@ -140,25 +151,26 @@ function AudioPreview({ audioPreview, onRemove }) {
           color: "#aaa",
           fontSize: 20,
           marginLeft: 2,
-          cursor: "pointer"
+          cursor: "pointer",
         }}
         type="button"
       >
         ×
       </button>
-      {url &&
-        <audio
-          ref={audioRef}
-          src={url}
-          preload="auto"
-          style={{ display: "none" }}
-        />
-      }
+      {url && <audio ref={audioRef} src={url} preload="auto" style={{ display: "none" }} />}
     </div>
   );
 }
 
+function isUserOnline(userInfo) {
+  if (!userInfo?.lastOnlineAt) return false;
+  return Date.now() - new Date(userInfo.lastOnlineAt).getTime() < 2 * 60 * 1000;
+}
+
 export default function AdminChatPage() {
+  const { getToken } = useAuth();
+  const { resetUnread, unread } = useAdminNotify();
+
   const [chats, setChats] = useState([]);
   const [selected, setSelected] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -172,304 +184,312 @@ export default function AdminChatPage() {
   const [typingMap, setTypingMap] = useState({});
   const [blocking, setBlocking] = useState(false);
   const [selectedUserInfo, setSelectedUserInfo] = useState(null);
-  const token = localStorage.getItem("token");
+  const [error, setError] = useState("");
+
   const endRef = useRef(null);
   const messagesRef = useRef(null);
   const mediaRecorder = useRef(null);
   const audioChunks = useRef([]);
   const recordingTimer = useRef();
-  const { resetUnread, unread } = useAdminNotify();
 
-  // === Основная логика ===
+  /** проверка авторизации */
   useEffect(() => {
+    if (!getToken()) {
+      setError("Нет токена авторизации! Перезайдите в админку.");
+    }
+  }, [getToken]);
+
+  /** универсальный auth-fetch */
+  const authFetch = async (url, opts = {}) => {
+    const t = getToken();
+    const headers = {
+      ...(opts.headers || {}),
+      ...(t ? { Authorization: `Bearer ${t}` } : {}),
+    };
+    return fetch(url, { ...opts, headers });
+  };
+
+  /** загрузка списка чатов */
+  const loadChats = async () => {
+    setError("");
+    try {
+      const res = await authFetch(api("/api/chat/admin"));
+      if (res.status === 401 || res.status === 403) {
+        setError("Нет доступа (token истёк или вы не админ). Зайдите заново.");
+        return;
+      }
+      if (!res.ok) {
+        setError("Ошибка получения чатов: " + (await res.text()));
+        return;
+      }
+      const data = await res.json();
+      setChats(
+        data.map((c) => ({
+          ...c,
+          lastMessage:
+            c.lastMessage?.text ||
+            (c.lastMessage?.imageUrls?.length ? "📷 Фото" : "—"),
+          lastMessageObj: c.lastMessage,
+        }))
+      );
+    } catch (e) {
+      setError("Ошибка соединения: " + e.message);
+    }
+  };
+
+  /** автообновление чатов */
+  useEffect(() => {
+    if (!getToken()) return;
     loadChats();
     const iv = setInterval(loadChats, 4000);
     return () => clearInterval(iv);
-  }, []);
+  }, [getToken]);
 
+  /** если выбранный чат исчез — сбрасываем выбор */
   useEffect(() => {
-    if (selected && !chats.find(c => c.userId === selected.userId)) {
+    if (selected && !chats.find((c) => c.userId === selected.userId)) {
       setSelected(null);
       setMessages([]);
       setSelectedUserInfo(null);
     }
-  }, [chats]);
+  }, [chats, selected]);
 
-  async function loadChats() {
-    const res = await fetch("/api/chat/admin", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const data = await res.json();
-    const formatted = data.map((c) => ({
-      ...c,
-      lastMessage:
-        c.lastMessage?.text ||
-        (c.lastMessage?.imageUrls?.length ? "📷 Фото" : "—"),
-      lastMessageObj: c.lastMessage,
-    }));
-    setChats(formatted);
-  }
-
+  /** статусы "печатает" */
   useEffect(() => {
+    if (!getToken()) return;
     const iv = setInterval(async () => {
       try {
-        const res = await fetch("/api/chat/typing/statuses", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          setTypingMap(await res.json());
-        }
+        const res = await authFetch(api("/api/chat/typing/statuses"));
+        if (res.ok) setTypingMap(await res.json());
       } catch {}
     }, 1200);
     return () => clearInterval(iv);
-  }, [token]);
+  }, [getToken]);
 
-  async function handleSelectChat(c) {
+  /** загрузка сообщений + инфо по юзеру */
+  useEffect(() => {
+    if (!selected || !getToken()) return;
+
+    const load = async () => {
+      await loadMessages();
+      const res = await authFetch(api(`/api/chat/admin/user/${selected.userId}`));
+      if (res.ok) {
+        const info = await res.json();
+        setSelectedUserInfo(info);
+      }
+    };
+
+    load();
+    const iv = setInterval(load, 2500);
+
+    resetUnread(selected.userId);
+    return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, getToken]);
+
+  const loadMessages = async () => {
+    if (!selected || !getToken()) return;
+    try {
+      const res = await authFetch(api(`/api/chat/admin/${selected.userId}`));
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(Array.isArray(data) ? data : []);
+      }
+    } catch {
+      setMessages([]);
+    }
+  };
+
+  const handleSelectChat = async (c) => {
     setSelected(c);
     setFiles([]);
     setInput("");
     setIsAutoScroll(true);
     setAudioPreview(null);
     resetUnread(c.userId);
-    // Загружаем подробную инфу
-    const res = await fetch(`/api/chat/admin/user/${c.userId}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const info = await res.json();
-    setSelectedUserInfo(info);
 
-    await fetch(`/api/chat/read/${c.userId}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await authFetch(api(`/api/chat/admin/user/${c.userId}`));
+    if (res.ok) setSelectedUserInfo(await res.json());
+
+    await authFetch(api(`/api/chat/read/${c.userId}`), { method: "POST" });
     setTimeout(loadChats, 180);
-  }
+  };
 
-  useEffect(() => {
-    if (!selected) return;
-    loadMessages();
-    const iv = setInterval(() => {
-      loadMessages();
-      if (selected) {
-        fetch(`/api/chat/admin/user/${selected.userId}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-          .then(res => res.json())
-          .then(info => setSelectedUserInfo(info));
-      }
-    }, 2500);
-    resetUnread(selected.userId);
-    return () => clearInterval(iv);
-  }, [selected]);
-
-  async function loadMessages() {
-    if (!selected) return;
-    try {
-      const res = await fetch(`/api/chat/admin/${selected.userId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      setMessages(Array.isArray(data) ? data : []);
-    } catch {
-      setMessages([]);
-    }
-  }
-
-  async function handleDeleteChat() {
+  const handleDeleteChat = async () => {
     if (!selected) return;
     if (!window.confirm("Удалить чат безвозвратно?")) return;
-    await fetch(`/api/chat/admin/${selected.userId}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+
+    const uid = selected.userId;
+    await authFetch(api(`/api/chat/admin/${uid}`), { method: "DELETE" });
+
+    resetUnread(uid);
     setSelected(null);
     setMessages([]);
     setSelectedUserInfo(null);
     loadChats();
-    resetUnread(selected.userId);
-  }
+  };
 
-  // --- Голосовые + предпрослушка ---
+  /** подготовка MediaRecorder для голосовых */
   useEffect(() => {
     if (!navigator.mediaDevices) return;
     navigator.mediaDevices
       .getUserMedia({ audio: true })
       .then((stream) => {
-        mediaRecorder.current = new window.MediaRecorder(stream);
-        mediaRecorder.current.ondataavailable = (e) =>
-          audioChunks.current.push(e.data);
-        mediaRecorder.current.onstop = () => {
-          const blob = new Blob(audioChunks.current, { type: "audio/webm" });
-          audioChunks.current = [];
-          setAudioPreview(blob);
-        };
+        try {
+          mediaRecorder.current = new window.MediaRecorder(stream);
+          mediaRecorder.current.ondataavailable = (e) => audioChunks.current.push(e.data);
+          mediaRecorder.current.onstop = () => {
+            const blob = new Blob(audioChunks.current, { type: "audio/webm" });
+            audioChunks.current = [];
+            setAudioPreview(blob);
+          };
+        } catch {}
       })
       .catch(() => {});
-  }, [files]);
+  }, []);
 
-  function startOrStopRecording() {
+  const typingOn = async () => {
+    if (!selected) return;
+    await authFetch(api(`/api/chat/typing`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: selected.userId,
+        isTyping: true,
+        name: "Менеджер",
+        fromAdmin: true,
+      }),
+    });
+  };
+
+  const typingOff = async () => {
+    if (!selected) return;
+    await authFetch(api(`/api/chat/typing`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: selected.userId,
+        isTyping: false,
+        name: "Менеджер",
+        fromAdmin: true,
+      }),
+    });
+  };
+
+  const startOrStopRecording = () => {
+    if (!mediaRecorder.current || !selected) return;
     if (recording) {
       mediaRecorder.current.stop();
       setRecording(false);
       clearInterval(recordingTimer.current);
+      typingOff();
     } else {
       audioChunks.current = [];
       mediaRecorder.current.start();
       setRecording(true);
       setRecordingTime(0);
-      recordingTimer.current = setInterval(() => setRecordingTime(t => t + 1), 1000);
-      fetch('/api/chat/typing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          userId: selected.userId,
-          isTyping: true,
-          name: "Менеджер",
-          fromAdmin: true
-        }),
-      });
+      recordingTimer.current = setInterval(() => setRecordingTime((t) => t + 1), 1000);
+      typingOn();
     }
-  }
+  };
 
-  function handleAudioRemove() {
-    setAudioPreview(null);
-  }
+  const handleAudioRemove = () => setAudioPreview(null);
 
-  async function handleAudioSend() {
-    if (!audioPreview) return;
+  const handleAudioSend = async () => {
+    if (!audioPreview || !selected) return;
     const form = new FormData();
     form.append("audio", audioPreview, "voice.webm");
     files.forEach((f) => form.append("images", f));
     setFiles([]);
     setAudioPreview(null);
-    await fetch(`/api/chat/admin/${selected.userId}`, {
+
+    await authFetch(api(`/api/chat/admin/${selected.userId}`), {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
       body: form,
     });
-    fetch('/api/chat/typing', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        userId: selected.userId,
-        isTyping: false,
-        name: "Менеджер",
-        fromAdmin: true
-      }),
-    });
+    await typingOff();
     await loadMessages();
     await loadChats();
-  }
+  };
 
-  async function sendText() {
-    if (!input.trim()) return;
-    await fetch(`/api/chat/admin/${selected.userId}`, {
+  const sendText = async () => {
+    if (!input.trim() || !selected) return;
+    await authFetch(api(`/api/chat/admin/${selected.userId}`), {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: input.trim() }),
     });
     setInput("");
-    fetch('/api/chat/typing', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        userId: selected.userId,
-        isTyping: false,
-        name: "Менеджер",
-        fromAdmin: true
-      }),
-    });
+    await typingOff();
     await loadMessages();
     await loadChats();
-  }
-  async function sendMedia({ audio, images }) {
+  };
+
+  const sendMedia = async ({ audio, images }) => {
+    if (!selected) return;
     const form = new FormData();
     if (input.trim()) form.append("text", input.trim());
     if (audio) form.append("audio", audio, "voice.webm");
     images.forEach((f) => form.append("images", f));
     setFiles([]);
     setInput("");
-    await fetch(`/api/chat/admin/${selected.userId}`, {
+
+    await authFetch(api(`/api/chat/admin/${selected.userId}`), {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
       body: form,
     });
-    fetch('/api/chat/typing', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        userId: selected.userId,
-        isTyping: false,
-        name: "Менеджер",
-        fromAdmin: true
-      }),
-    });
+    await typingOff();
     await loadMessages();
     await loadChats();
-  }
-  function handleSend() {
+  };
+
+  const handleSend = () => {
     if (audioPreview) handleAudioSend();
     else if (files.length) sendMedia({ audio: null, images: files });
     else sendText();
-  }
-  function handleInput(e) {
+  };
+
+  const handleInput = (e) => {
     setInput(e.target.value);
-    fetch('/api/chat/typing', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+    if (!selected) return;
+    authFetch(api(`/api/chat/typing`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId: selected.userId,
         isTyping: !!e.target.value,
         name: "Менеджер",
-        fromAdmin: true
+        fromAdmin: true,
       }),
     });
-  }
-  function removeFile(idx) {
-    setFiles(files.filter((_, i) => i !== idx));
-  }
+  };
 
-  // Добавил сюда подсветку и пульс точки и метку NEW
-  function hasUnread(chat) {
+  const removeFile = (idx) => setFiles(files.filter((_, i) => i !== idx));
+
+  const hasUnread = (chat) => {
     if (!chat.lastMessageObj) return false;
     if (selected?.userId === chat.userId) return false;
     if (unread[chat.userId]) return true;
     return !chat.lastMessageObj.fromAdmin && !chat.lastMessageObj.read;
-  }
-
-  function typingNameForUser(userId) {
-    const t = typingMap[userId];
-    return t?.name || (t?.fromAdmin ? "Менеджер" : "Клиент");
-  }
+  };
 
   useEffect(() => {
     if (isAutoScroll) endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isAutoScroll]);
-  function handleScroll() {
+
+  const handleScroll = () => {
     const el = messagesRef.current;
     if (!el) return;
     setIsAutoScroll(el.scrollHeight - el.scrollTop - el.clientHeight < 100);
+  };
+
+  if (error) {
+    return <div style={{ color: "red", padding: 30, fontSize: 18 }}>{error}</div>;
   }
 
-  // === Рендер ===
   return (
     <div className="admin-chat-root" style={{ display: "flex", height: "100vh" }}>
-      {/* Левая панель чатов */}
+      {/* левая панель чатов */}
       <aside className="admin-chat-list">
         <h2 style={{ fontSize: 20, marginBottom: 20 }}>💬 Чаты</h2>
         {chats.map((c) => {
@@ -484,7 +504,7 @@ export default function AdminChatPage() {
                 gap: 12,
                 padding: 12,
                 borderRadius: 10,
-                background: isSelected ? "#0d99ff" : (unreadExists ? "#ffeaea" : "#f9fafb"),
+                background: isSelected ? "#0d99ff" : unreadExists ? "#ffeaea" : "#f9fafb",
                 color: isSelected ? "#fff" : "#000",
                 cursor: "pointer",
                 alignItems: "center",
@@ -506,7 +526,7 @@ export default function AdminChatPage() {
                   justifyContent: "center",
                   fontWeight: "bold",
                   fontSize: 16,
-                  position: "relative"
+                  position: "relative",
                 }}
               >
                 {c.name?.[0] || "?"}
@@ -523,32 +543,51 @@ export default function AdminChatPage() {
                       borderRadius: "50%",
                       border: "3px solid #fff",
                       boxShadow: "0 0 8px 3px #f4433688",
-                      animation: "pulseRed 1.5s infinite"
+                      animation: "pulseRed 1.5s infinite",
                     }}
                   />
                 )}
               </div>
               <div style={{ flex: 1, overflow: "hidden" }}>
-                <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    fontSize: 14,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
                   {c.name}
                   {unreadExists && (
-                    <span style={{
-                      marginLeft: 6,
-                      background: "#f44336",
-                      color: "#fff",
-                      borderRadius: 4,
-                      padding: "2px 6px",
-                      fontSize: 10,
-                      fontWeight: "bold",
-                      verticalAlign: "middle",
-                      userSelect: "none"
-                    }}>
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        background: "#f44336",
+                        color: "#fff",
+                        borderRadius: 4,
+                        padding: "2px 6px",
+                        fontSize: 10,
+                        fontWeight: "bold",
+                        verticalAlign: "middle",
+                        userSelect: "none",
+                      }}
+                    >
                       NEW
                     </span>
                   )}
                 </div>
                 <div style={{ fontSize: 12, opacity: 0.7 }}>{c.phone}</div>
-                <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    opacity: 0.6,
+                    marginTop: 4,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
                   {c.lastMessage?.slice(0, 30)}
                 </div>
               </div>
@@ -570,10 +609,13 @@ export default function AdminChatPage() {
                   padding: 0,
                   transition: "color 0.2s ease",
                 }}
-                onClick={e => { e.stopPropagation(); handleDeleteChat(); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteChat();
+                }}
                 title="Удалить чат"
-                onMouseEnter={e => e.currentTarget.style.color = "#f44336"}
-                onMouseLeave={e => e.currentTarget.style.color = "#888"}
+                onMouseEnter={(e) => (e.currentTarget.style.color = "#f44336")}
+                onMouseLeave={(e) => (e.currentTarget.style.color = "#888")}
               >
                 ×
               </button>
@@ -582,18 +624,25 @@ export default function AdminChatPage() {
         })}
       </aside>
 
-      {/* Центр: сообщения */}
-      <section className="admin-chat-messages-block" style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}>
+      {/* центр: сообщения */}
+      <section
+        className="admin-chat-messages-block"
+        style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}
+      >
         {!selected ? (
           <div className="empty">Выберите чат слева</div>
         ) : (
           <>
-            <header className="chat-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <header
+              className="chat-header"
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+            >
               <div>
                 <strong>{selected.name}</strong>{" "}
                 <span style={{ fontSize: 13, opacity: 0.8 }}>{selected.phone}</span>
               </div>
             </header>
+
             <div
               className="admin-chat-messages"
               style={{
@@ -607,51 +656,51 @@ export default function AdminChatPage() {
               ref={messagesRef}
               onScroll={handleScroll}
             >
-              {Array.isArray(messages) && messages.map((m, i) => (
-                <div
-                  key={i}
-                  style={{
-                    alignSelf: m.fromAdmin ? "flex-start" : "flex-end",
-                    background: m.fromAdmin ? "#0d99ff" : "#e5f1ff",
-                    color: m.fromAdmin ? "#fff" : "#1e293b",
-                    borderRadius: 16,
-                    padding: "10px 14px",
-                    maxWidth: "70%",
-                    marginBottom: "10px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px",
-                    wordBreak: "break-word",
-                    position: "relative",
-                  }}
-                >
-                  <div style={{ fontSize: 12, opacity: 0.8 }}>
-                    {m.fromAdmin ? "Менеджер" : selected.name}
-                  </div>
-                  {m.text && (
-                    <div style={{ fontSize: 14, whiteSpace: "pre-wrap" }}>{m.text}</div>
-                  )}
-                  {m.imageUrls?.map((u, idx) => (
-                    <img
-                      key={idx}
-                      src={u.startsWith("http") ? u : `http://localhost:3000${u}`}
-                      alt="img"
-                      style={{ maxWidth: "200px", borderRadius: "8px" }}
-                    />
-                  ))}
-                  {m.audioUrl && (
-                    <VoiceMessage
-                      audioUrl={`http://localhost:3000${m.audioUrl}`}
-                      createdAt={m.createdAt}
-                    />
-                  )}
-                  {!m.audioUrl && (
-                    <div style={{ fontSize: 12, textAlign: "right", opacity: 0.6 }}>
-                      {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              {Array.isArray(messages) &&
+                messages.map((m, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      alignSelf: m.fromAdmin ? "flex-start" : "flex-end",
+                      background: m.fromAdmin ? "#0d99ff" : "#e5f1ff",
+                      color: m.fromAdmin ? "#fff" : "#1e293b",
+                      borderRadius: 16,
+                      padding: "10px 14px",
+                      maxWidth: "70%",
+                      marginBottom: "10px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "6px",
+                      wordBreak: "break-word",
+                      position: "relative",
+                    }}
+                  >
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      {m.fromAdmin ? "Менеджер" : selected.name}
                     </div>
-                  )}
-                </div>
-              ))}
+                    {m.text && <div style={{ fontSize: 14, whiteSpace: "pre-wrap" }}>{m.text}</div>}
+                    {m.imageUrls?.map((u, idx) => (
+                      <img
+                        key={idx}
+                        src={u.startsWith("http") ? u : `${API_URL}${u}`}
+                        alt="img"
+                        style={{ maxWidth: "200px", borderRadius: "8px" }}
+                      />
+                    ))}
+                    {m.audioUrl && (
+                      <VoiceMessage audioUrl={`${API_URL}${m.audioUrl}`} createdAt={m.createdAt} />
+                    )}
+                    {!m.audioUrl && (
+                      <div style={{ fontSize: 12, textAlign: "right", opacity: 0.6 }}>
+                        {new Date(m.createdAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
               {typingMap[selected.userId]?.isTyping && !typingMap[selected.userId]?.fromAdmin && (
                 <div className="typing-indicator">
                   <div
@@ -666,7 +715,7 @@ export default function AdminChatPage() {
                       marginLeft: "auto",
                       boxShadow: "0 1px 8px #0d99ff18",
                       display: "flex",
-                      alignItems: "center"
+                      alignItems: "center",
                     }}
                   >
                     <span style={{ color: "#1976d2", fontWeight: 600 }}>
@@ -679,6 +728,7 @@ export default function AdminChatPage() {
               )}
               <div ref={endRef} />
             </div>
+
             {files.length > 0 && (
               <div className="image-preview-list">
                 {files.map((file, i) => (
@@ -691,6 +741,7 @@ export default function AdminChatPage() {
                 ))}
               </div>
             )}
+
             <div
               style={{
                 display: "flex",
@@ -703,24 +754,20 @@ export default function AdminChatPage() {
             >
               <button
                 onClick={() => setShowEmoji((v) => !v)}
-                style={{
-                  fontSize: 20,
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                }}
+                style={{ fontSize: 20, background: "none", border: "none", cursor: "pointer" }}
                 tabIndex={-1}
                 disabled={!!audioPreview}
               >
                 😊
               </button>
+
               {!audioPreview && (
                 <input
                   type="text"
                   placeholder="Написать…"
                   value={input}
                   onChange={handleInput}
-                  onKeyDown={e => e.key === "Enter" && handleSend()}
+                  onKeyDown={(e) => e.key === "Enter" && handleSend()}
                   style={{
                     flex: 1,
                     padding: "10px 14px",
@@ -731,7 +778,9 @@ export default function AdminChatPage() {
                   }}
                 />
               )}
+
               {audioPreview && <AudioPreview audioPreview={audioPreview} onRemove={handleAudioRemove} />}
+
               <label
                 style={{
                   fontSize: 20,
@@ -740,7 +789,7 @@ export default function AdminChatPage() {
                   alignItems: "center",
                   justifyContent: "center",
                   opacity: audioPreview ? 0.5 : 1,
-                  pointerEvents: audioPreview ? "none" : "auto"
+                  pointerEvents: audioPreview ? "none" : "auto",
                 }}
                 tabIndex={-1}
               >
@@ -754,6 +803,7 @@ export default function AdminChatPage() {
                   disabled={!!audioPreview}
                 />
               </label>
+
               <button
                 onClick={startOrStopRecording}
                 style={{
@@ -772,36 +822,41 @@ export default function AdminChatPage() {
                 }}
                 tabIndex={-1}
                 disabled={!!audioPreview}
+                title={recording ? "Остановить запись" : "Записать голосовое"}
               >
                 {recording ? (
-                  <span style={{
-                    fontSize: 24,
-                    color: "#fa2222",
-                    animation: "pulseMic 1s infinite",
-                    transition: "color 0.2s",
-                    display: "inline-block",
-                    position: "relative"
-                  }}>
+                  <span
+                    style={{
+                      fontSize: 24,
+                      color: "#fa2222",
+                      animation: "pulseMic 1s infinite",
+                      transition: "color 0.2s",
+                      display: "inline-block",
+                      position: "relative",
+                    }}
+                  >
                     🎤
-                    <span style={{
-                      position: "absolute",
-                      top: -4,
-                      right: -10,
-                      background: "#fa2222",
-                      color: "#fff",
-                      borderRadius: 10,
-                      minWidth: 18,
-                      height: 18,
-                      fontSize: 11,
-                      fontWeight: 700,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: "0 5px",
-                      boxShadow: "0 1px 4px #fa222244",
-                      border: "2px solid #fff",
-                      zIndex: 1
-                    }}>
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: -4,
+                        right: -10,
+                        background: "#fa2222",
+                        color: "#fff",
+                        borderRadius: 10,
+                        minWidth: 18,
+                        height: 18,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "0 5px",
+                        boxShadow: "0 1px 4px #fa222244",
+                        border: "2px solid #fff",
+                        zIndex: 1,
+                      }}
+                    >
                       {recordingTime}
                     </span>
                     <style>
@@ -815,20 +870,23 @@ export default function AdminChatPage() {
                     </style>
                   </span>
                 ) : (
-                  <span style={{
-                    fontSize: 20,
-                    color: "#3c4f67",
-                    borderRadius: "50%",
-                    width: 30,
-                    height: 30,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center"
-                  }}>
+                  <span
+                    style={{
+                      fontSize: 20,
+                      color: "#3c4f67",
+                      borderRadius: "50%",
+                      width: 30,
+                      height: 30,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
                     🎤
                   </span>
                 )}
               </button>
+
               <button
                 onClick={handleSend}
                 style={{
@@ -841,7 +899,7 @@ export default function AdminChatPage() {
                   border: "none",
                   cursor: "pointer",
                   marginLeft: 2,
-                  boxShadow: "0 1px 4px #17aaff22"
+                  boxShadow: "0 1px 4px #17aaff22",
                 }}
                 tabIndex={-1}
                 disabled={!!recording}
@@ -850,6 +908,7 @@ export default function AdminChatPage() {
                 ➤
               </button>
             </div>
+
             {showEmoji && (
               <div style={{ position: "absolute", bottom: 70, left: 320, zIndex: 10 }}>
                 <Picker
@@ -864,7 +923,7 @@ export default function AdminChatPage() {
         )}
       </section>
 
-      {/* Правая инфопанель */}
+      {/* правая инфопанель */}
       {selected && selectedUserInfo && (
         <aside
           className="user-info-block"
@@ -889,7 +948,7 @@ export default function AdminChatPage() {
               alignItems: "center",
               marginBottom: 20,
               gap: 13,
-              width: "100%"
+              width: "100%",
             }}
           >
             <div
@@ -910,7 +969,9 @@ export default function AdminChatPage() {
               {selectedUserInfo.name?.[0] || "?"}
             </div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 2 }}>{selectedUserInfo.name}</div>
+              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 2 }}>
+                {selectedUserInfo.name}
+              </div>
               <div style={{ fontSize: 13, color: "#64748b" }}>{selectedUserInfo.phone}</div>
             </div>
           </div>
@@ -926,11 +987,11 @@ export default function AdminChatPage() {
               <b>Статус:</b>{" "}
               <span
                 style={{
-                  color: selectedUserInfo.isOnline ? "#21c087" : "#d43838",
+                  color: isUserOnline(selectedUserInfo) ? "#21c087" : "#d43838",
                   fontWeight: 600,
                 }}
               >
-                {selectedUserInfo.isOnline ? "Онлайн" : "Оффлайн"}
+                {isUserOnline(selectedUserInfo) ? "Онлайн" : "Оффлайн"}
               </span>
             </div>
             <div style={{ fontSize: 14, marginBottom: 5 }}>
@@ -941,28 +1002,26 @@ export default function AdminChatPage() {
                   fontWeight: 600,
                 }}
               >
-                {selectedUserInfo.isBlocked ? "Заблокирован" : "Активен"}
+                {selectedUserInfo.isBlocked ? "Заблокирован" : "Активный"}
               </span>
             </div>
           </div>
+
           <div style={{ flex: 1 }} />
+
           <button
             disabled={blocking}
             onClick={async () => {
+              if (!selected) return;
               setBlocking(true);
-              await fetch(`/api/chat/admin/user/${selected.userId}/block`, {
+              await authFetch(api(`/api/chat/admin/user/${selected.userId}/block`), {
                 method: "POST",
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  "Content-Type": "application/json"
-                },
-                body: JSON.stringify({ block: !selectedUserInfo.isBlocked })
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ block: !selectedUserInfo.isBlocked }),
               });
               setBlocking(false);
-              // обновить инфу о пользователе
-              const res = await fetch(`/api/chat/admin/user/${selected.userId}`, {
-                headers: { Authorization: `Bearer ${token}` }
-              });
+
+              const res = await authFetch(api(`/api/chat/admin/user/${selected.userId}`));
               const info = await res.json();
               setSelectedUserInfo(info);
               await loadChats();
@@ -979,23 +1038,20 @@ export default function AdminChatPage() {
                 ? "linear-gradient(90deg,#21c087 0%,#1fa463 100%)"
                 : "linear-gradient(90deg,#fd4447 0%,#e54d2e 100%)",
               color: "#fff",
-              boxShadow: selectedUserInfo.isBlocked
-                ? "0 3px 16px #21c08733"
-                : "0 3px 16px #fd444733",
+              boxShadow: selectedUserInfo.isBlocked ? "0 3px 16px #21c08733" : "0 3px 16px #fd444733",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               gap: 10,
               cursor: blocking ? "not-allowed" : "pointer",
               outline: "none",
-              marginBottom: 0,
               marginTop: 18,
               transition: "background 0.18s,box-shadow 0.18s,transform 0.18s",
-              position: "relative"
+              position: "relative",
             }}
-            onMouseDown={e => e.currentTarget.style.transform = "scale(0.96)"}
-            onMouseUp={e => e.currentTarget.style.transform = "scale(1)"}
-            onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}
+            onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.96)")}
+            onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
+            onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
           >
             <span style={{ display: "flex", alignItems: "center" }}>
               {selectedUserInfo.isBlocked ? (
@@ -1014,18 +1070,12 @@ export default function AdminChatPage() {
           </button>
         </aside>
       )}
-      {/* Пульсающая анимация для точки */}
+
       <style>{`
         @keyframes pulseRed {
-          0% {
-            box-shadow: 0 0 6px 2px #f44336cc;
-          }
-          50% {
-            box-shadow: 0 0 12px 6px #f4433666;
-          }
-          100% {
-            box-shadow: 0 0 6px 2px #f44336cc;
-          }
+          0% { box-shadow: 0 0 6px 2px #f44336cc; }
+          50% { box-shadow: 0 0 12px 6px #f4433666; }
+          100% { box-shadow: 0 0 6px 2px #f44336cc; }
         }
       `}</style>
     </div>

@@ -1,97 +1,135 @@
+// src/main.jsx
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import "./assets/style.css";
 
+// ====== Public pages ======
 import HomePage from "./pages/HomePage";
 import ProductPage from "./pages/ProductPage";
 import CartPage from "./pages/CartPage";
-import LoginPage from "./pages/LoginPage";
-import RegisterPage from "./pages/RegisterPage";
 import ProfilePage from "./pages/ProfilePage";
 import CheckoutPage from "./pages/CheckoutPage";
 import ThanksPage from "./pages/ThanksPage";
+import CatalogPage from "./pages/CatalogPage";
+import LoginRegisterPage from "./pages/LoginRegisterPage";
+import AboutTabsPage from "./pages/AboutTabsPage";
+import GroupPage from "./pages/GroupPage";
 
+// ====== Components ======
 import PrivateRoute from "./components/PrivateRoute";
+import ScrollToTop from "./components/ScrollToTop";
+import AddToCartAnimation from "./components/AddToCartAnimation";
+import ChatWidgetWrapper from "./components/ChatWidgetWrapper";
+import ThemeSync from "./components/ThemeSync";
+
+// ====== Context providers ======
 import { CartProvider } from "./context/CartContext";
 import { AuthProvider } from "./context/AuthContext";
+import { SiteProvider, useSite } from "./context/SiteContext";
+import { AdminNotifyProvider } from "./context/AdminNotifyContext";
 
+// ====== Admin pages ======
 import AdminLayout from "./admin/AdminLayout";
 import AdminOrdersPage from "./admin/AdminOrdersPage";
 import AdminChatPage from "./admin/AdminChatPage";
-import { AdminNotifyProvider } from "./context/AdminNotifyContext";
+import AdminClientsPage from "./admin/AdminClientsPage";
+import AdminClientDetailPage from "./admin/AdminClientDetailPage";
+import AdminProductsPage from "./admin/AdminProductsPage";
+import AdminGroupsPage from "./admin/AdminGroupsPage";
+import AdminCreateGroupPage from "./admin/AdminCreateGroupPage";
+import AdminEditGroupPage from "./admin/AdminEditGroupPage";
+import AdminAddProductPage from "./admin/AdminAddProductPage";
+import AdminEditProductPage from "./admin/AdminEditProductPage";
+import AdminSettingsPage from "./admin/AdminSettingsPage";
 
-// (Если ChatWidget на клиенте нужен — не убирай)
-import ChatIcon from "./components/ChatIcon";
-import ChatWindow from "./components/ChatWindow";
+// ====== Super Admin page ======
+import SuperAdminPanel from "./superadmin/SuperAdminPanel";
 
-function ChatWidget() {
-  const [chatOpen, setChatOpen] = React.useState(false);
-  const [hasUnread, setHasUnread] = React.useState(false);
+// ====== SiteReady wrapper ======
+function SiteReady({ children }) {
+  const { display, loading } = useSite();
+  if (loading || !display || !display.palette) return <div />;
   return (
     <>
-      {!chatOpen && <ChatIcon hasUnread={hasUnread} onClick={() => setChatOpen(true)} />}
-      {chatOpen && <ChatWindow onClose={() => setChatOpen(false)} />}
+      <ThemeSync />
+      {children}
     </>
   );
 }
 
-function ChatWidgetWrapper() {
-  const location = window.location;
-  // Если у тебя используется useLocation — замени на хук из react-router-dom
-  if (location.pathname.startsWith('/admin')) return null;
-  return <ChatWidget />;
-}
+// ====== Render app ======
+const root = ReactDOM.createRoot(document.getElementById("root"));
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
-    <AuthProvider>
-      <CartProvider>
-        <Router>
-          <ChatWidgetWrapper />
-          <Routes>
-            {/* Клиентские страницы */}
-            <Route path="/" element={<HomePage />} />
-            <Route path="/product/:id" element={<ProductPage />} />
-            <Route path="/cart" element={<CartPage />} />
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
-            <Route
-              path="/profile"
-              element={
-                <PrivateRoute>
-                  <ProfilePage />
-                </PrivateRoute>
-              }
-            />
-            <Route
-              path="/checkout"
-              element={
-                <PrivateRoute>
-                  <CheckoutPage />
-                </PrivateRoute>
-              }
-            />
-            <Route path="/thanks" element={<ThanksPage />} />
+    <SiteProvider>
+      <SiteReady>
+        <AuthProvider>
+          <CartProvider>
+            <Router>
+              <ScrollToTop />
+              <AddToCartAnimation />
+              <ChatWidgetWrapper />
+              <Routes>
+                {/* ==== Public routes ==== */}
+                <Route path="/" element={<HomePage />} />
+                <Route path="/product/:id" element={<ProductPage />} />
+                <Route path="/cart" element={<CartPage />} />
+                <Route path="/login" element={<LoginRegisterPage />} />
+                <Route path="/register" element={<LoginRegisterPage />} />
+                <Route
+                  path="/profile"
+                  element={
+                    <PrivateRoute>
+                      <ProfilePage />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/checkout"
+                  element={
+                    <PrivateRoute>
+                      <CheckoutPage />
+                    </PrivateRoute>
+                  }
+                />
+                <Route path="/thanks" element={<ThanksPage />} />
+                <Route path="/info" element={<AboutTabsPage />} />
+                <Route path="/catalog" element={<CatalogPage />} />
+                <Route path="/catalog/group/:groupId" element={<GroupPage />} />
 
-            {/* Админка */}
-            <Route
-              path="/admin/*"
-              element={
-                <PrivateRoute adminOnly={true}>
-                  <AdminNotifyProvider>
-                    <AdminLayout />
-                  </AdminNotifyProvider>
-                </PrivateRoute>
-              }
-            >
-              <Route path="orders" element={<AdminOrdersPage />} />
-              <Route path="chat" element={<AdminChatPage />} />
-            </Route>
-          </Routes>
-        </Router>
-      </CartProvider>
-    </AuthProvider>
+                {/* ==== Admin routes ==== */}
+                <Route
+                  path="/admin/*"
+                  element={
+                    <PrivateRoute adminOnly={true}>
+                      <AdminNotifyProvider>
+                        <AdminLayout />
+                      </AdminNotifyProvider>
+                    </PrivateRoute>
+                  }
+                >
+                  <Route path="orders" element={<AdminOrdersPage />} />
+                  <Route path="products" element={<AdminProductsPage />} />
+                  <Route path="products/create" element={<AdminAddProductPage />} />
+                  <Route path="products/:id/edit" element={<AdminEditProductPage />} />
+                  <Route path="groups" element={<AdminGroupsPage />} />
+                  <Route path="groups/create" element={<AdminCreateGroupPage />} />
+                  <Route path="groups/edit/:id" element={<AdminEditGroupPage />} />
+                  <Route path="chat" element={<AdminChatPage />} />
+                  <Route path="clients" element={<AdminClientsPage />} />
+                  <Route path="clients/:id" element={<AdminClientDetailPage />} />
+                  <Route path="settings" element={<AdminSettingsPage />} />
+                </Route>
+
+                {/* ==== Super Admin (Основатель) ==== */}
+                <Route path="/superadmin" element={<SuperAdminPanel />} />
+              </Routes>
+            </Router>
+          </CartProvider>
+        </AuthProvider>
+      </SiteReady>
+    </SiteProvider>
   </React.StrictMode>
 );

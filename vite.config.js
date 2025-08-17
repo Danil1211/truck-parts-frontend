@@ -1,8 +1,11 @@
-// vite.config.js
 export default {
   server: {
     proxy: {
-      '/api': 'http://localhost:3000'
+      '/api': {
+        target: 'https://truck-parts-backend.onrender.com',
+        changeOrigin: true,
+        secure: false,
+      }
     }
   }
 }

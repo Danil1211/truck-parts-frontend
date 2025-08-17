@@ -1,19 +1,27 @@
-import React from 'react';
-import { Navigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import React from "react";
+import { Navigate, useLocation } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 
-function PrivateRoute({ children, adminOnly = false }) {
-  const { user } = useAuth();
+/**
+ * Использование:
+ * <PrivateRoute><ProfilePage /></PrivateRoute>
+ * <PrivateRoute adminOnly><AdminLayout /></PrivateRoute>
+ */
+export default function PrivateRoute({ children, adminOnly = false }) {
+  const { user, loading } = useAuth();
+  const location = useLocation();
 
-  if (user === null) {
-    // Пока user не загрузился — можно показать loader
-    return <div>Загрузка...</div>;
+  if (loading) return null;
+
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  if (!user) return <Navigate to="/login" replace />;
-  if (adminOnly && !user.isAdmin) return <Navigate to="/" replace />;
+  // теперь проверяем role или isAdmin
+  if (adminOnly) {
+    const canAdmin = user.role === "owner" || user.role === "admin" || user.isAdmin;
+    if (!canAdmin) return <Navigate to="/" replace />;
+  }
 
   return children;
 }
-
-export default PrivateRoute;
